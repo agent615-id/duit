@@ -1,4 +1,3 @@
-
 name: Build duitw Android APK
 
 on:
@@ -19,7 +18,9 @@ jobs:
     name: Build debug APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
-
+    env:
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -28,6 +29,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Setup Java
         uses: actions/setup-java@v4
@@ -35,16 +37,32 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # GitHub's ubuntu-latest runner already includes Android command-line tools.
+      # Do not use android-actions/setup-android here: its legacy "tools" package
+      # request can fail because that SDK package is no longer published.
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          test -n "$SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses || true
+          "$SDKMANAGER" \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
 
-      - name: Install Android build platform
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+      - name: Prepare Android debug signing cache
+        run: mkdir -p "$HOME/.android"
+
+      - name: Restore stable debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: duitw-debug-keystore-v1
 
       - name: Install dependencies
         run: npm install
 
-      - name: Build web application
+      - name: Check JavaScript and prepare offline web bundle
         run: |
           npm test
           npm run build
@@ -52,7 +70,7 @@ jobs:
       - name: Generate Android project
         run: npx cap add android
 
-      - name: Sync Capacitor
+      - name: Sync Capacitor and apply Android resources
         run: |
           npx cap sync android
           node scripts/patch-android.mjs
@@ -63,12 +81,12 @@ jobs:
           chmod +x gradlew
           ./gradlew --no-daemon assembleDebug
 
-      - name: Prepare APK
+      - name: Name APK
         run: |
           mkdir -p release
           cp android/app/build/outputs/apk/debug/app-debug.apk release/duitw.apk
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: duitw-apk
